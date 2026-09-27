@@ -94,7 +94,7 @@ if ($robloxData) {
 $report += "`n<b>SYSTEM:</b>`n"
 try {
     $os = (Get-CimInstance Win32_OperatingSystem).Caption
-    $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/GB,2)
+    $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,2)
     $report += "OS: $os`nRAM: $ram GB"
 } catch {
     $report += "System info error"
